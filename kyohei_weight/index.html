@@ -1,0 +1,252 @@
+きょーへーの減量ノート（PWA）
+
+【内容】
+- 毎日の体重、ウエスト、柔道の有無・時間、メモ
+- 直近7日分の体重平均
+- 体重推移グラフ、週ごとの平均線
+- 開始体重・目標体重・途中目標の進捗
+- JSONバックアップ/復元、CSV書き出し
+- PWA manifest と service worker（ホーム画面追加・オフライン起動用）
+
+【重要】
+このフォルダを端末にダウンロードして index.html を直接開くだけでは、Androidの「アプリをインストール」やオフライン機能が完全には動作しません。
+PWAとしてホーム画面に追加するには、HTTPSで公開する必要があります。無料の静的ホスティング（例：GitHub Pages）に、このフォルダ内のファイルをすべてアップロードして公開してください。
+
+【Androidでホーム画面に追加】
+1. HTTPSで公開したサイトをChromeで開く
+2. Chrome右上の ⋮ メニューを開く
+3. 「アプリをインストール」または「ホーム画面に追加」を選ぶ
+4. 追加後、ホーム画面のアイコンから起動する
+
+【データ保存とバックアップ】
+- 記録はそのブラウザの localStorage に保存されます。アカウントやクラウドには自動同期されません。
+- ブラウザのデータ削除・端末故障などで失われる可能性があります。設定内の「バックアップを書き出す（JSON）」を定期的に使ってください。
+- 機種変更後は、新しい端末でアプリを開き、JSONファイルを読み込んで復元してください。
+- CSVは表計算ソフトで確認するための書き出し用です。
+
+【ファイル】
+index.html             アプリ本体
+manifest.webmanifest   ホーム画面追加用設定
+sw.js                  オフライン用キャッシュ
+icon-192.png           アプリアイコン
+icon-512.png           アプリアイコン（大）
+
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#183b35">
+<meta name="description" content="体重・ウエスト・柔道の記録を続ける、きょーへー専用の減量ノート。">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icon-192.png">
+<link rel="apple-touch-icon" href="./icon-192.png">
+<title>きょーへーの減量ノート</title>
+<style>
+:root{--bg:#f4f7f3;--card:#fff;--ink:#1d2925;--muted:#68766f;--green:#1f6b50;--green2:#dcefe5;--line:#e0e8e1;--orange:#e39b43;--red:#b94b45}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Noto Sans JP",sans-serif;line-height:1.5}
+header{background:linear-gradient(135deg,#183b35,#276c52);color:white;padding:24px 18px 26px;border-radius:0 0 24px 24px}
+header .eyebrow{font-size:12px;letter-spacing:.08em;opacity:.8}h1{font-size:24px;margin:5px 0 4px}header p{margin:0;font-size:13px;opacity:.9}
+main{max-width:760px;margin:0 auto;padding:14px 12px 38px}
+.cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:-8px}
+.card,.panel{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;box-shadow:0 3px 12px #173b3010}
+.metric small{display:block;color:var(--muted);font-size:11px}.metric strong{font-size:22px;display:block;margin-top:3px}.metric em{font-style:normal;font-size:11px;color:var(--muted)}
+.panel{margin-top:12px}.panel h2{font-size:16px;margin:0 0 12px}.hint{font-size:12px;color:var(--muted);margin:8px 0 0}
+.formgrid{display:grid;grid-template-columns:1fr 1fr;gap:11px}.field label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}
+input,textarea{width:100%;font:inherit;font-size:16px;color:var(--ink);background:white;border:1px solid #cbd8ce;border-radius:10px;padding:11px;min-height:44px}
+textarea{min-height:72px;resize:vertical}.wide{grid-column:1/-1}.checkrow{display:flex!important;align-items:center;gap:9px;padding:7px 0}.checkrow input{width:20px;height:20px;min-height:0;accent-color:var(--green)}
+button{border:0;border-radius:11px;background:var(--green);color:white;padding:12px 14px;font:inherit;font-weight:650;min-height:44px;cursor:pointer}
+button.secondary{background:var(--green2);color:var(--green)}button.ghost{background:#f0f3f0;color:var(--ink)}button.danger{background:#fae8e6;color:var(--red)}
+.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.actions button{flex:1}
+.progressline{height:10px;background:#e9eee9;border-radius:99px;overflow:hidden;margin:9px 0}.progressline span{display:block;height:100%;width:0;background:linear-gradient(90deg,#2a8b61,#80c79a);border-radius:99px}
+.progresslabels{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:var(--muted)}
+canvas{width:100%;height:230px;display:block}.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted)}.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;background:#1f6b50}
+.tablewrap{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:10px 7px;border-bottom:1px solid var(--line);white-space:nowrap}th{font-size:11px;color:var(--muted);font-weight:600}td .mini{border:0;background:#edf4ef;color:var(--green);padding:6px 8px;min-height:32px;font-size:12px;margin-right:4px}
+.empty{padding:22px 10px;text-align:center;color:var(--muted);font-size:13px}
+details summary{font-weight:650;cursor:pointer;padding:2px 0 10px}footer{text-align:center;font-size:11px;color:var(--muted);padding:16px}
+.install{display:none;margin-top:12px;width:100%;background:#fff;color:var(--green);border:1px solid #cfe1d4}
+@media(max-width:420px){.metric strong{font-size:19px}.card{padding:11px}.formgrid{gap:9px}.panel{padding:13px}}
+</style>
+</head>
+<body>
+<header>
+  <div class="eyebrow">KYOHĒ'S PERSONAL TRACKER</div>
+  <h1>🥋 きょーへーの減量ノート</h1>
+  <p>体重・ウエスト・柔道を、無理なくコツコツ記録しよう！</p>
+  <button id="installBtn" class="install">📲 ホーム画面にインストール</button>
+</header>
+<main>
+  <section class="cards">
+    <div class="card metric"><small>最新の体重</small><strong id="latestWeight">—</strong><em id="latestDate">記録待ち</em></div>
+    <div class="card metric"><small>7日平均</small><strong id="weeklyAvg">—</strong><em>直近7日分の記録</em></div>
+    <div class="card metric"><small>開始から</small><strong id="lost">—</strong><em>体重の変化</em></div>
+  </section>
+  <section class="panel">
+    <h2>🎯 目標への進み具合</h2>
+    <div class="progresslabels"><span id="startLabel">開始 105kg</span><strong id="percentLabel">0%</strong><span id="goalLabel">目標 79.9kg</span></div>
+    <div class="progressline"><span id="progressBar"></span></div>
+    <div class="progresslabels"><span id="remainingLabel">目標まで — kg</span><span id="milestoneLabel">次の目標：95kg</span></div>
+    <p class="hint">初期設定は開始105kg・目標79.9kg。設定から変更できるよ。</p>
+  </section>
+  <section class="panel">
+    <h2>✍️ 今日の記録</h2>
+    <form id="entryForm">
+      <div class="formgrid">
+        <div class="field"><label for="date">日付</label><input id="date" type="date" required></div>
+        <div class="field"><label for="weight">体重（kg）</label><input id="weight" type="number" min="20" max="400" step="0.1" placeholder="例：100.0" required></div>
+        <div class="field"><label for="waist">ウエスト（cm・任意）</label><input id="waist" type="number" min="30" max="250" step="0.1" placeholder="例：110.0"></div>
+        <div class="field"><label for="duration">柔道の時間（分）</label><input id="duration" type="number" min="0" max="600" step="5" placeholder="休みの日は0"></div>
+        <div class="field wide"><label class="checkrow"><input id="judo" type="checkbox"> 🥋 今日は柔道をした</label></div>
+        <div class="field wide"><label for="note">メモ（任意）</label><textarea id="note" placeholder="疲れ具合、腰の調子、気づいたことなど"></textarea></div>
+      </div>
+      <div class="actions"><button type="submit" id="saveBtn">記録を保存</button><button type="button" class="secondary" id="clearForm">入力をクリア</button></div>
+      <p class="hint" id="formHint">同じ日付の記録は上書きできます。</p>
+    </form>
+  </section>
+  <section class="panel">
+    <h2>📈 体重の推移</h2>
+    <canvas id="chart" aria-label="体重推移グラフ"></canvas>
+    <div class="legend"><span><i class="dot"></i>体重</span><span style="color:#e39b43">━ 週ごとの平均</span></div>
+    <p class="hint">短期の上下より、全体の流れを見よう。体重は水分などでも日々変動するよ。</p>
+  </section>
+  <section class="panel">
+    <h2>📚 記録一覧</h2>
+    <div class="tablewrap" id="recordsWrap"></div>
+  </section>
+  <section class="panel">
+    <details>
+      <summary>⚙️ 目標・データのバックアップ</summary>
+      <div class="formgrid">
+        <div class="field"><label for="startWeight">開始体重（kg）</label><input id="startWeight" type="number" min="20" max="400" step="0.1" value="105"></div>
+        <div class="field"><label for="goalWeight">目標体重（kg）</label><input id="goalWeight" type="number" min="20" max="400" step="0.1" value="79.9"></div>
+        <div class="field"><label for="milestone">次の目標（kg）</label><input id="milestone" type="number" min="20" max="400" step="0.1" value="95"></div>
+      </div>
+      <div class="actions"><button id="saveSettings">設定を保存</button></div>
+      <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
+      <p class="hint">機種変更やブラウザのデータ削除に備えて、ときどきバックアップしてね。</p>
+      <div class="actions"><button class="secondary" id="exportJson">バックアップを書き出す（JSON）</button><button class="secondary" id="exportCsv">表計算用に書き出す（CSV）</button></div>
+      <div class="field" style="margin-top:12px"><label for="importFile">バックアップから復元（JSON）</label><input id="importFile" type="file" accept=".json,application/json"></div>
+      <p class="hint">復元すると、現在の記録はバックアップの内容に置き換わります。</p>
+      <div class="actions"><button class="danger" id="resetAll">すべての記録を削除</button></div>
+    </details>
+  </section>
+  <footer>記録はこのブラウザ内に保存されます。定期的にバックアップしてください。<br>健康上の判断は体重だけでなく、体調や主治医の助言も大切に。</footer>
+</main>
+<script>
+(function(){
+const KEY='kyohei-weight-judo-v1';
+const $=id=>document.getElementById(id);
+const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
+let state={entries:[],settings:{start:105,goal:79.9,milestone:95}};
+try{const saved=localStorage.getItem(KEY);if(saved){const parsed=JSON.parse(saved);if(Array.isArray(parsed.entries))state.entries=parsed.entries;if(parsed.settings)state.settings={...state.settings,...parsed.settings}}}catch(e){}
+$('date').value=today();$('startWeight').value=state.settings.start;$('goalWeight').value=state.settings.goal;$('milestone').value=state.settings.milestone;
+function persist(){try{localStorage.setItem(KEY,JSON.stringify(state));return true}catch(e){alert('保存できませんでした。ブラウザの空き容量や設定を確認してね。');return false}}
+function sorted(){return [...state.entries].sort((a,b)=>a.date.localeCompare(b.date))}
+function fmt(n){return Number.isFinite(n)?n.toFixed(1)+'kg':'—'}
+function dayDiff(a,b){return Math.round((new Date(a+'T12:00:00')-new Date(b+'T12:00:00'))/86400000)}
+function avg(arr){return arr.length?arr.reduce((s,x)=>s+x.weight,0)/arr.length:null}
+function render(){
+ const es=sorted(),latest=es[es.length-1];
+ $('latestWeight').textContent=latest?fmt(latest.weight):'—';$('latestDate').textContent=latest?latest.date:'記録待ち';
+ const last7=latest?es.filter(e=>dayDiff(latest.date,e.date)>=0&&dayDiff(latest.date,e.date)<=6):[];
+ $('weeklyAvg').textContent=last7.length?fmt(avg(last7)):'—';
+ const delta=latest?state.settings.start-latest.weight:null;
+ $('lost').textContent=delta===null?'—':(delta>=0?'−':'＋')+Math.abs(delta).toFixed(1)+'kg';
+ const total=state.settings.start-state.settings.goal,done=latest?state.settings.start-latest.weight:0;
+ const pct=total>0?Math.max(0,Math.min(100,done/total*100)):0;
+ $('percentLabel').textContent=pct.toFixed(0)+'%';$('progressBar').style.width=pct+'%';
+ $('startLabel').textContent='開始 '+state.settings.start+'kg';$('goalLabel').textContent='目標 '+state.settings.goal+'kg';
+ $('remainingLabel').textContent=latest?'目標まで '+Math.max(0,latest.weight-state.settings.goal).toFixed(1)+'kg':'目標まで — kg';
+ $('milestoneLabel').textContent=latest?(latest.weight<=state.settings.milestone?'次の目標クリア！ 🎉':'次の目標：'+state.settings.milestone+'kg'):'次の目標：'+state.settings.milestone+'kg';
+ renderTable(es);drawChart(es);
+}
+function renderTable(es){
+ const wrap=$('recordsWrap');
+ if(!es.length){wrap.innerHTML='<div class="empty">まだ記録がないよ。上から最初の記録を入力してね！</div>';return}
+ const rows=[...es].reverse().map(e=>`<tr><td>${e.date}</td><td><b>${e.weight.toFixed(1)}</b></td><td>${e.waist==null?'—':e.waist.toFixed(1)}</td><td>${e.judo?'あり'+(e.duration?' ('+e.duration+'分)':''):'—'}</td><td><button class="mini" data-edit="${e.date}">編集</button><button class="mini" data-del="${e.date}">削除</button></td></tr>`).join('');
+ wrap.innerHTML=`<table><thead><tr><th>日付</th><th>体重kg</th><th>ウエストcm</th><th>柔道</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>`;
+ wrap.querySelectorAll('[data-edit]').forEach(b=>b.addEventListener('click',()=>editEntry(b.dataset.edit)));
+ wrap.querySelectorAll('[data-del]').forEach(b=>b.addEventListener('click',()=>{if(confirm(b.dataset.del+' の記録を削除する？')){state.entries=state.entries.filter(e=>e.date!==b.dataset.del);persist();render()}}));
+}
+function drawChart(es){
+ const c=$('chart'),rect=c.getBoundingClientRect(),dpr=window.devicePixelRatio||1,w=Math.max(280,rect.width),h=230;
+ c.width=w*dpr;c.height=h*dpr;const ctx=c.getContext('2d');ctx.scale(dpr,dpr);ctx.clearRect(0,0,w,h);
+ if(!es.length){ctx.fillStyle='#68766f';ctx.font='13px sans-serif';ctx.textAlign='center';ctx.fillText('記録するとグラフが表示されるよ',w/2,h/2);return}
+ const values=es.map(e=>e.weight),min=Math.floor((Math.min(...values)-2)/2)*2,max=Math.ceil((Math.max(...values)+2)/2)*2;
+ const left=38,right=12,top=15,bottom=30,pw=w-left-right,ph=h-top-bottom;
+ ctx.font='11px sans-serif';ctx.textAlign='right';ctx.textBaseline='middle';
+ for(let v=min;v<=max;v+=2){let yy=top+(max-v)/(max-min||1)*ph;ctx.strokeStyle='#e4ebe5';ctx.beginPath();ctx.moveTo(left,yy);ctx.lineTo(w-right,yy);ctx.stroke();ctx.fillStyle='#68766f';ctx.fillText(String(v),left-7,yy)}
+ const x=i=>left+(es.length===1?pw/2:i/(es.length-1)*pw),y=v=>top+(max-v)/(max-min||1)*ph;
+ ctx.strokeStyle='#1f6b50';ctx.lineWidth=2.5;ctx.beginPath();es.forEach((e,i)=>i?ctx.lineTo(x(i),y(e.weight)):ctx.moveTo(x(i),y(e.weight)));ctx.stroke();
+ es.forEach((e,i)=>{ctx.fillStyle='#1f6b50';ctx.beginPath();ctx.arc(x(i),y(e.weight),3.2,0,Math.PI*2);ctx.fill()});
+ const buckets={};es.forEach(e=>{const d=new Date(e.date+'T12:00:00');const day=(d.getDay()+6)%7;d.setDate(d.getDate()-day);const k=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');(buckets[k]??=[]).push(e)});
+ const weeks=Object.keys(buckets).sort().map(k=>({date:k,weight:avg(buckets[k])}));
+ if(weeks.length>1){ctx.save();ctx.setLineDash([5,4]);ctx.strokeStyle='#e39b43';ctx.lineWidth=2;ctx.beginPath();weeks.forEach((e,i)=>{const idx=es.findIndex(r=>r.date>=e.date);const xx=x(Math.max(0,idx));i?ctx.lineTo(xx,y(e.weight)):ctx.moveTo(xx,y(e.weight))});ctx.stroke();ctx.restore()}
+ ctx.fillStyle='#68766f';ctx.textAlign='left';ctx.textBaseline='alphabetic';ctx.fillText(es[0].date.slice(5),left,h-8);ctx.textAlign='right';ctx.fillText(es[es.length-1].date.slice(5),w-right,h-8);
+}
+$('entryForm').addEventListener('submit',e=>{
+ e.preventDefault();const date=$('date').value,weight=Number($('weight').value),waist=$('waist').value===''?null:Number($('waist').value),duration=$('duration').value===''?0:Number($('duration').value);
+ if(!date||!Number.isFinite(weight))return;
+ const entry={date,weight,waist,judo:$('judo').checked,duration,note:$('note').value.trim()};
+ state.entries=state.entries.filter(x=>x.date!==date);state.entries.push(entry);persist();
+ $('entryForm').reset();$('date').value=today();$('saveBtn').textContent='記録を保存';$('formHint').textContent='同じ日付の記録は上書きできます。';render();
+});
+function editEntry(date){const e=state.entries.find(x=>x.date===date);if(!e)return;$('date').value=e.date;$('weight').value=e.weight;$('waist').value=e.waist??'';$('duration').value=e.duration||'';$('judo').checked=!!e.judo;$('note').value=e.note||'';$('saveBtn').textContent='変更を保存';$('formHint').textContent='保存すると、この日付の記録を更新します。';window.scrollTo({top:0,behavior:'smooth'})}
+$('clearForm').addEventListener('click',()=>{$('entryForm').reset();$('date').value=today();$('saveBtn').textContent='記録を保存';$('formHint').textContent='同じ日付の記録は上書きできます。'});
+$('saveSettings').addEventListener('click',()=>{const start=Number($('startWeight').value),goal=Number($('goalWeight').value),milestone=Number($('milestone').value);if(!start||!goal||goal>=start){alert('目標体重は開始体重より小さい数字にしてね。');return}state.settings={start,goal,milestone};persist();render();alert('設定を保存したよ！')});
+function download(name,content,type){const blob=new Blob([content],{type}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}
+$('exportJson').addEventListener('click',()=>download('kyohei-weight-backup-'+today()+'.json',JSON.stringify(state,null,2),'application/json'));
+$('exportCsv').addEventListener('click',()=>{const q=v=>'"'+String(v??'').replace(/"/g,'""')+'"';const lines=[['日付','体重kg','ウエストcm','柔道','柔道時間分','メモ'],...sorted().map(e=>[e.date,e.weight,e.waist??'',e.judo?'はい':'いいえ',e.duration||0,e.note||''])].map(r=>r.map(q).join(',')).join('\r\n');download('kyohei-weight-records-'+today()+'.csv','\ufeff'+lines,'text/csv;charset=utf-8')});
+$('importFile').addEventListener('change',async e=>{const f=e.target.files[0];if(!f)return;try{const data=JSON.parse(await f.text());if(!Array.isArray(data.entries)||!data.settings)throw Error();if(!confirm('現在の記録をバックアップ内容で置き換える？'))return;state={entries:data.entries,settings:{...state.settings,...data.settings}};persist();$('startWeight').value=state.settings.start;$('goalWeight').value=state.settings.goal;$('milestone').value=state.settings.milestone;render();alert('バックアップから復元したよ！')}catch(err){alert('このJSONファイルは読み込めなかったよ。正しいバックアップファイルを選んでね。')}finally{e.target.value=''}});
+$('resetAll').addEventListener('click',()=>{if(confirm('すべての記録と設定を初期状態に戻す？ 先にバックアップを取るのがおすすめだよ。')){state={entries:[],settings:{start:105,goal:79.9,milestone:95}};persist();$('startWeight').value=105;$('goalWeight').value=79.9;$('milestone').value=95;render()}});
+let installPrompt=null;
+window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('installBtn').style.display='block'});
+$('installBtn').addEventListener('click',async()=>{if(!installPrompt){alert('Chromeのメニュー（⋮）から「アプリをインストール」または「ホーム画面に追加」を選んでね。');return}installPrompt.prompt();await installPrompt.userChoice;installPrompt=null;$('installBtn').style.display='none'});
+if('serviceWorker' in navigator && location.protocol.startsWith('http'))window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+window.addEventListener('resize',()=>drawChart(sorted()));
+render();
+})();
+</script>
+</body>
+</html>
+{
+  "id": "./",
+  "name": "きょーへーの減量ノート",
+  "short_name": "減量ノート",
+  "description": "体重・ウエスト・柔道の記録アプリ",
+  "lang": "ja-JP",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4f7f3",
+  "theme_color": "#183b35",
+  "icons": [
+    {
+      "src": "./icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
+const CACHE = 'kyohei-weight-judo-v1';
+const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
+self.addEventListener('install', event => {
+  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(FILES)).then(() => self.skipWaiting()));
+});
+self.addEventListener('activate', event => {
+  event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim()));
+});
+self.addEventListener('fetch', event => {
+  if (event.request.method !== 'GET') return;
+  event.respondWith(caches.match(event.request).then(cached => cached || fetch(event.request).then(response => {
+    const copy = response.clone(); caches.open(CACHE).then(cache => cache.put(event.request, copy)); return response;
+  }).catch(() => caches.match('./index.html'))));
+});
